@@ -6,3 +6,5 @@ computer_kicad/#auto_saved_files#
 computer_kicad/_autosave*
 computer_kicad/~*
 computer_kicad/6502schematics-backups
+programs/__pycache__
+programs/vasm6502_oldstyle.exe

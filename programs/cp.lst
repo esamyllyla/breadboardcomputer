@@ -1,0 +1,1026 @@
+Sections:
+00: "seg8000" (8000-8529)
+01: "seg8fff" (8FFF-9000)
+
+
+Source: "cp.asm"
+                        	     1: ; Control Program for 6502 breadboard computer
+                        	     2: 
+                        	     3: ; LCD-control pin variables
+                        	     4: E  = %1000
+                        	     5: RS = %10
+                        	     6: ; LCD-display displays 2 or 4 lines
+                        	     7: ; set N to 1 for 4 lines, 0 for 2 lines
+                        	     8: N = 1
+                        	     9: 
+                        	    10: ; Keyboard matrix polling variables:
+                        	    11: TMP = $0200
+                        	    12: SHIFT = $0201
+                        	    13: CURSOR_POSITION = $0202
+                        	    14: TMP_KEYCODE = $0203
+                        	    15: MONITOR_LINE_1 = $0210 ; 16 characters each
+                        	    16:                        ; so line 1 occupies 0x0210 - 0x021f etc
+                        	    17: MONITOR_LINE_2 = $0220 ; 0x0220 - 0x022f
+                        	    18: MONITOR_LINE_3 = $0230 ; 0x0230 - 0x023f
+                        	    19: MONITOR_LINE_4 = $0240 ; 0x0240 - 0x24f
+                        	    20: 
+                        	    21: ; User input interpreting variables:
+                        	    22: COMMAND = $0250 ; "E" = Error, "R" = read, "W" = write
+                        	    23: enter_pressed = $0251
+                        	    24: tmp_input_byte = $0252
+                        	    25: is_hex_letter = $0253
+                        	    26: input_bytes_index = $0254
+                        	    27: LOW_NYBBLE = $0255
+                        	    28: 
+                        	    29: RAL = $030 ; Read Address Low (pointer) for reading command   | POINTERS MUST BE ON ZERO PAGE
+                        	    30: RAH = $031 ; Read Address High (pointer) for reading command  | ON 6502
+                        	    31: input_bytes = $0260
+                        	    32: 
+                        	    33:     org $8000
+                        	    34: 
+00:8000 A9FF            	    35:     lda #$ff
+00:8002 8D0260          	    36:     sta $6002
+00:8005 A9F0            	    37:     lda #$f0
+00:8007 8D0360          	    38:     sta $6003
+                        	    39:     
+00:800A 205E83          	    40:     jsr init_lcd
+00:800D 203780          	    41:     jsr init_monitor_memory
+                        	    42: 
+00:8010 A200            	    43:     ldx #$0
+                        	    44: print_boot_msg:
+00:8012 BD3280          	    45:     lda boot_msg, X
+00:8015 204584          	    46:     jsr write_letter
+00:8018 E8              	    47:     inx
+00:8019 E005            	    48:     cpx #$5
+00:801B D0F5            	    49:     bne print_boot_msg
+00:801D 20E384          	    50:     jsr line_4
+                        	    51:     
+                        	    52: shell:
+00:8020 205580          	    53:     jsr getline
+00:8023 203081          	    54:     jsr interpret
+00:8026 20E881          	    55:     jsr run_command
+00:8029 20F882          	    56:     jsr printline
+00:802C 4C2080          	    57:     jmp shell
+                        	    58: 
+                        	    59: endloop:
+00:802F 4C2F80          	    60:     jmp endloop
+                        	    61: 
+                        	    62: boot_msg:
+00:8032 52              	    63:     byte "R", "E", "A", "D", "Y"
+00:8033 45
+00:8034 41
+00:8035 44
+00:8036 59
+                        	    64: 
+                        	    65: init_monitor_memory:
+00:8037 A900            	    66:     lda #$0
+00:8039 A200            	    67:     ldx #$0
+00:803B 8D0102          	    68:     sta SHIFT
+00:803E 8D0202          	    69:     sta CURSOR_POSITION
+00:8041 A920            	    70:     lda #" "
+                        	    71: init_monitor_memory_loop:
+00:8043 9D1002          	    72:     sta MONITOR_LINE_1, X
+00:8046 9D2002          	    73:     sta MONITOR_LINE_2, X
+00:8049 9D3002          	    74:     sta MONITOR_LINE_3, X
+00:804C 9D4002          	    75:     sta MONITOR_LINE_4, X
+00:804F E8              	    76:     inx
+00:8050 E010            	    77:     cpx #$10
+00:8052 D0EF            	    78:     bne init_monitor_memory_loop
+00:8054 60              	    79:     rts
+                        	    80: 
+                        	    81: getline:
+                        	    82: continue_polling:
+00:8055 206380          	    83:     jsr kb_poll
+00:8058 209080          	    84:     jsr kb_encode
+00:805B AD5102          	    85:     lda enter_pressed
+00:805E C901            	    86:     cmp #$1
+00:8060 D0F3            	    87:     bne continue_polling
+00:8062 60              	    88:     rts
+                        	    89: 
+                        	    90: kb_poll: ; keyboard polling
+00:8063 A908            	    91:     lda #%00001000
+00:8065 8D0002          	    92:     sta TMP
+00:8068 A200            	    93:     ldx #$0
+                        	    94: kb_shft:
+00:806A AD0002          	    95:     lda TMP
+00:806D 0A              	    96:     asl
+00:806E E8              	    97:     inx
+00:806F 8D0002          	    98:     sta TMP
+00:8072 8D0160          	    99:     sta $6001 ; PORT A = 6001
+00:8075 AD0160          	   100:     lda $6001  ; read PORT A, PORT A HANDLES KEYBOARD MATRIX, 4 lower bits are inputs,
+                        	   101:                ; 4 higher bits are outputs
+00:8078 290F            	   102:     and #$0f
+00:807A F00A            	   103:     beq kb_index
+00:807C 0D0002          	   104:     ora TMP
+00:807F 8D0302          	   105:     sta TMP_KEYCODE
+00:8082 60              	   106:     rts
+00:8083 4C8680          	   107:     jmp kb_index
+                        	   108: kb_index:
+00:8086 E004            	   109:     cpx #$4
+00:8088 F003            	   110:     beq kb_end
+00:808A 4C6A80          	   111:     jmp kb_shft
+                        	   112: kb_end:
+00:808D 4C6380          	   113:     jmp kb_poll
+                        	   114: 
+                        	   115: kb_encode:
+00:8090 0D0002          	   116:     ora TMP
+00:8093 8D0302          	   117:     sta TMP_KEYCODE
+00:8096 A200            	   118:     ldx #$0
+                        	   119: keycode_search:
+00:8098 BDC382          	   120:     lda keycodes, X
+00:809B CD0302          	   121:     cmp TMP_KEYCODE
+00:809E F009            	   122:     beq kb_encoded_write
+00:80A0 E8              	   123:     inx
+00:80A1 E010            	   124:     cpx #$10
+00:80A3 D001            	   125:     bne keycode_search_continue
+00:80A5 60              	   126:     rts
+                        	   127: keycode_search_continue:
+00:80A6 4C9880          	   128:     jmp keycode_search
+                        	   129: kb_encoded_write:
+00:80A9 E00F            	   130:     cpx #$f
+00:80AB D01C            	   131:     bne skip_clear
+00:80AD AD0202          	   132:     lda CURSOR_POSITION
+00:80B0 C900            	   133:     cmp #$0
+00:80B2 F065            	   134:     beq end_kb_encoded_write
+00:80B4 38              	   135:     sec
+00:80B5 AD0202          	   136:     lda CURSOR_POSITION
+00:80B8 E901            	   137:     sbc #$1
+00:80BA 8D0202          	   138:     sta CURSOR_POSITION
+00:80BD AA              	   139:     tax
+00:80BE A920            	   140:     lda #" "
+00:80C0 9D4002          	   141:     sta MONITOR_LINE_4, X
+00:80C3 20B582          	   142:     jsr backspace
+00:80C6 4C1981          	   143:     jmp end_kb_encoded_write
+                        	   144: skip_clear:
+00:80C9 E00E            	   145:     cpx #$e
+00:80CB D006            	   146:     bne skip_shift
+00:80CD 201D81          	   147:     jsr update_shift
+00:80D0 4C1981          	   148:     jmp end_kb_encoded_write
+                        	   149: skip_shift:
+00:80D3 E00B            	   150:     cpx #$b
+00:80D5 D008            	   151:     bne skip_enter
+                        	   152: ; this happens when ENTER is pressed =======
+00:80D7 A901            	   153:     lda #$1
+00:80D9 8D5102          	   154:     sta enter_pressed
+                        	   155: ; ==========================================
+00:80DC 4C1981          	   156:     jmp end_kb_encoded_write
+                        	   157: skip_enter:
+00:80DF A900            	   158:     lda #$0
+00:80E1 8D5102          	   159:     sta enter_pressed
+00:80E4 AD0202          	   160:     lda CURSOR_POSITION
+00:80E7 C910            	   161:     cmp #$10
+00:80E9 D003            	   162:     bne write_keyletter
+00:80EB 4C1981          	   163:     jmp end_kb_encoded_write
+                        	   164: write_keyletter:
+00:80EE AD0202          	   165:     lda CURSOR_POSITION
+00:80F1 18              	   166:     clc
+00:80F2 6901            	   167:     adc #$1
+00:80F4 8D0202          	   168:     sta CURSOR_POSITION
+00:80F7 AD0102          	   169:     lda SHIFT         
+00:80FA D010            	   170:     bne use_keyletters_2 ; if shift = 1, load letter from table keyletters_2
+                        	   171: use_keyletters_1:
+00:80FC BDD382          	   172:     lda keyletters, X
+00:80FF AC0202          	   173:     ldy CURSOR_POSITION
+00:8102 88              	   174:     dey ; for some reason address MONITOR_LINE_4 + CURSOR POSITION is off to right by one??
+00:8103 994002          	   175:     sta MONITOR_LINE_4, Y
+00:8106 204584          	   176:     jsr write_letter
+00:8109 4C1981          	   177:     jmp end_kb_encoded_write
+                        	   178: use_keyletters_2:
+00:810C BDE382          	   179:     lda keyletters_2, X
+00:810F AC0202          	   180:     ldy CURSOR_POSITION
+00:8112 88              	   181:     dey
+00:8113 994002          	   182:     sta MONITOR_LINE_4, Y
+00:8116 204584          	   183:     jsr write_letter
+                        	   184: end_kb_encoded_write:
+00:8119 202984          	   185:     jsr longlonglong_sleep
+00:811C 60              	   186:     rts
+                        	   187: 
+                        	   188: update_shift:
+00:811D 48              	   189:     pha
+00:811E AD0102          	   190:     lda SHIFT
+00:8121 D006            	   191:     bne no_shift_add ; If shift != 0, set to 0
+00:8123 18              	   192:     clc
+00:8124 6901            	   193:     adc #$1          ; else set to 1
+00:8126 4C2B81          	   194:     jmp store_shift
+                        	   195: no_shift_add:
+00:8129 A900            	   196:     lda #$0
+                        	   197: store_shift:
+00:812B 8D0102          	   198:     sta SHIFT
+00:812E 68              	   199:     pla
+00:812F 60              	   200:     rts
+                        	   201: 
+                        	   202: interpret: ; Index register X is overwritten here
+00:8130 48              	   203:     pha
+00:8131 A921            	   204:     lda #"!"
+00:8133 8D5002          	   205:     sta COMMAND ; set Error (!) by default
+00:8136 A900            	   206:     lda #$0
+00:8138 8D5502          	   207:     sta LOW_NYBBLE ; start storing to high nybble
+00:813B 8D5402          	   208:     sta input_bytes_index
+00:813E 8D5302          	   209:     sta is_hex_letter
+00:8141 A200            	   210:     ldx #$0
+                        	   211: clear_input_buffer:
+00:8143 9D6002          	   212:     sta input_bytes, X
+00:8146 E8              	   213:     inx
+00:8147 E010            	   214:     cpx #$10
+00:8149 D0F8            	   215:     bne clear_input_buffer
+00:814B A200            	   216:     ldx #$0
+                        	   217: fetch_char:
+00:814D BD4002          	   218:     lda MONITOR_LINE_4, X
+00:8150 C920            	   219:     cmp #" "
+00:8152 F048            	   220:     beq inc_and_next
+00:8154 C92E            	   221:     cmp #"."
+00:8156 D008            	   222:     bne skip_was_read
+00:8158 A952            	   223:     lda #"R"
+00:815A 8D5002          	   224:     sta COMMAND
+00:815D 4C9C81          	   225:     jmp inc_and_next
+                        	   226: skip_was_read:
+00:8160 C93A            	   227:     cmp #":"
+00:8162 D008            	   228:     bne skip_was_write
+00:8164 A957            	   229:     lda #"W"
+00:8166 8D5002          	   230:     sta COMMAND
+00:8169 4C9C81          	   231:     jmp inc_and_next
+                        	   232: skip_was_write: ; character is supposed to represent hex
+00:816C C952            	   233:     cmp #"R"
+00:816E D008            	   234:     bne skip_was_run
+00:8170 A945            	   235:     lda #"E" ; E as execute, now R is occupied for Read
+00:8172 8D5002          	   236:     sta COMMAND
+00:8175 4C9C81          	   237:     jmp inc_and_next
+                        	   238: skip_was_run:
+00:8178 C930            	   239:     cmp #$30    ; 0x30 is "0", character should be equal or higher
+00:817A 301B            	   240:     bmi invalid_hex ; if A - 30 is negative, BMI branches
+00:817C C947            	   241:     cmp #$47    ; 0x46 is "F", character should be equal or lower
+00:817E 1017            	   242:     bpl invalid_hex ; if A - 47 is zero or positive, BPL branches
+00:8180 C940            	   243:     cmp #$40
+00:8182 3008            	   244:     bmi not_hex_letter
+00:8184 A001            	   245:     ldy #$1
+00:8186 8C5302          	   246:     sty is_hex_letter
+00:8189 4C9181          	   247:     jmp is_letter_set
+                        	   248: not_hex_letter:
+00:818C A000            	   249:     ldy #$0
+00:818E 8C5302          	   250:     sty is_hex_letter
+                        	   251: is_letter_set:
+00:8191 20A381          	   252:     jsr ascii_to_byte
+00:8194 4C9C81          	   253:     jmp inc_and_next
+                        	   254: invalid_hex:
+00:8197 A921            	   255:     lda #"!" ; SOME LETTER FOR ERROR
+00:8199 8D5002          	   256:     sta COMMAND
+                        	   257: inc_and_next:
+00:819C E8              	   258:     inx
+00:819D E010            	   259:     cpx #$10 ; increment until x >= 16
+00:819F D0AC            	   260:     bne fetch_char
+                        	   261: interpret_end:
+00:81A1 68              	   262:     pla
+00:81A2 60              	   263:     rts
+                        	   264: 
+                        	   265: ascii_to_byte:
+00:81A3 AC5302          	   266:     ldy is_hex_letter
+00:81A6 C001            	   267:     cpy #$1
+00:81A8 F006            	   268:     beq is_a_to_f
+00:81AA 38              	   269:     sec
+00:81AB E930            	   270:     sbc #$30
+00:81AD 4CB381          	   271:     jmp store_temp
+                        	   272: is_a_to_f:
+00:81B0 38              	   273:     sec
+00:81B1 E937            	   274:     sbc #$37
+                        	   275: store_temp:
+00:81B3 290F            	   276:     and #$0f
+00:81B5 8D5202          	   277:     sta tmp_input_byte
+00:81B8 AC5402          	   278:     ldy input_bytes_index
+00:81BB B96002          	   279:     lda input_bytes, Y
+00:81BE 0A              	   280:     asl A
+00:81BF 0A              	   281:     asl A
+00:81C0 0A              	   282:     asl A
+00:81C1 0A              	   283:     asl A
+00:81C2 29F0            	   284:     and #$f0
+00:81C4 0D5202          	   285:     ora tmp_input_byte
+00:81C7 996002          	   286:     sta input_bytes, Y
+00:81CA AD5502          	   287:     lda LOW_NYBBLE
+00:81CD C901            	   288:     cmp #$1
+00:81CF F008            	   289:     beq increment_byte_index
+00:81D1 A901            	   290:     lda #$1
+00:81D3 8D5502          	   291:     sta LOW_NYBBLE
+00:81D6 4CE781          	   292:     jmp end_ascii_to_byte
+                        	   293: increment_byte_index:
+00:81D9 AD5402          	   294:     lda input_bytes_index
+00:81DC 18              	   295:     clc
+00:81DD 6901            	   296:     adc #$1
+00:81DF 8D5402          	   297:     sta input_bytes_index
+00:81E2 A900            	   298:     lda #$0
+00:81E4 8D5502          	   299:     sta LOW_NYBBLE
+                        	   300: end_ascii_to_byte:
+00:81E7 60              	   301:     rts
+                        	   302: 
+                        	   303: run_command:
+00:81E8 AD5002          	   304:     lda COMMAND ; Commands are (R)ead, (W)rite, (E)xecute
+00:81EB C952            	   305:     cmp #"R"
+00:81ED D006            	   306:     bne skip_read
+00:81EF 201482          	   307:     jsr read
+00:81F2 4C1382          	   308:     jmp command_end
+                        	   309: skip_read:
+00:81F5 C957            	   310:     cmp #"W"
+00:81F7 D006            	   311:     bne skip_write
+00:81F9 203F82          	   312:     jsr write
+00:81FC 4C1382          	   313:     jmp command_end
+                        	   314: skip_write:
+00:81FF C945            	   315:     cmp #"E"
+00:8201 D006            	   316:     bne skip_execute
+00:8203 205782          	   317:     jsr execute
+00:8206 4C1382          	   318:     jmp command_end
+                        	   319: skip_execute:
+00:8209 C921            	   320:     cmp #"!"
+00:820B D006            	   321:     bne skip_throw_error
+00:820D 206F82          	   322:     jsr throw_error
+00:8210 4C1382          	   323:     jmp command_end
+                        	   324: skip_throw_error:
+                        	   325: command_end:
+00:8213 60              	   326:     rts
+                        	   327: 
+                        	   328: read:
+00:8214 20A882          	   329:     jsr clear_line_4
+00:8217 A200            	   330:     ldx #$0
+00:8219 AD6002          	   331:     lda input_bytes
+00:821C 208082          	   332:     jsr hex_to_ascii
+00:821F 8531            	   333:     sta RAH
+00:8221 AD6102          	   334:     lda input_bytes + 1
+00:8224 E8              	   335:     inx
+00:8225 208082          	   336:     jsr hex_to_ascii
+00:8228 8530            	   337:     sta RAL
+00:822A E8              	   338:     inx
+00:822B A93A            	   339:     lda #":"
+00:822D 9D4002          	   340:     sta MONITOR_LINE_4, X
+00:8230 E8              	   341:     inx
+00:8231 A920            	   342:     lda #" "
+00:8233 9D4002          	   343:     sta MONITOR_LINE_4, X
+00:8236 E8              	   344:     inx
+00:8237 A000            	   345:     ldy #$0
+00:8239 B130            	   346:     lda (RAL), Y
+00:823B 208082          	   347:     jsr hex_to_ascii
+00:823E 60              	   348:     rts
+                        	   349: 
+                        	   350: write:
+00:823F 20A882          	   351:     jsr clear_line_4
+00:8242 AD6002          	   352:     lda input_bytes
+00:8245 8531            	   353:     sta RAH
+00:8247 AD6102          	   354:     lda input_bytes + 1
+00:824A 8530            	   355:     sta RAL
+00:824C AD6202          	   356:     lda input_bytes + 2
+00:824F A000            	   357:     ldy #$0
+00:8251 9130            	   358:     sta (RAL), Y
+00:8253 201482          	   359:     jsr read
+00:8256 60              	   360:     rts
+                        	   361: 
+                        	   362: execute:
+00:8257 20A882          	   363:     jsr clear_line_4
+00:825A A945            	   364:     lda #"E"
+00:825C 8D4002          	   365:     sta MONITOR_LINE_4
+00:825F 20F882          	   366:     jsr printline
+00:8262 AD6002          	   367:     lda input_bytes
+00:8265 8531            	   368:     sta RAH
+00:8267 AD6102          	   369:     lda input_bytes + 1
+00:826A 8530            	   370:     sta RAL
+00:826C 6C3000          	   371:     jmp (RAL)
+                        	   372: 
+                        	   373: throw_error:
+00:826F 20A882          	   374:     jsr clear_line_4
+00:8272 A200            	   375:     ldx #$0
+                        	   376: write_error:
+00:8274 BDF382          	   377:     lda error_msg, X
+00:8277 9D4002          	   378:     sta MONITOR_LINE_4, X
+00:827A E8              	   379:     inx
+00:827B E005            	   380:     cpx #$5
+00:827D D0F5            	   381:     bne write_error
+00:827F 60              	   382:     rts
+                        	   383: 
+                        	   384: hex_to_ascii: ; hex stored in accumulator, cursor index stored in X-register
+00:8280 A000            	   385:     ldy #$0
+00:8282 48              	   386:     pha
+00:8283 4A              	   387:     lsr A
+00:8284 4A              	   388:     lsr A
+00:8285 4A              	   389:     lsr A
+00:8286 4A              	   390:     lsr A
+00:8287 290F            	   391:     and #$0f
+                        	   392: convert_nybble:
+00:8289 C90A            	   393:     cmp #$a
+00:828B 3006            	   394:     bmi nybble_to_number
+00:828D 18              	   395:     clc
+00:828E 6937            	   396:     adc #$37
+00:8290 4C9682          	   397:     jmp nybble_converted
+                        	   398: nybble_to_number:
+00:8293 18              	   399:     clc
+00:8294 6930            	   400:     adc #$30
+                        	   401: nybble_converted:
+00:8296 9D4002          	   402:     sta MONITOR_LINE_4, X
+00:8299 C001            	   403:     cpy #$1
+00:829B F009            	   404:     beq hex_to_ascii_end
+00:829D 68              	   405:     pla
+00:829E 48              	   406:     pha
+00:829F 290F            	   407:     and #$0f
+00:82A1 E8              	   408:     inx
+00:82A2 C8              	   409:     iny
+00:82A3 4C8982          	   410:     jmp convert_nybble
+                        	   411: hex_to_ascii_end:
+00:82A6 68              	   412:     pla
+00:82A7 60              	   413:     rts
+                        	   414: 
+                        	   415: clear_line_4:
+00:82A8 A200            	   416:     ldx #$0
+00:82AA A920            	   417:     lda #" "
+                        	   418: continue_clear_line_4:
+00:82AC 9D4002          	   419:     sta MONITOR_LINE_4, X
+00:82AF E8              	   420:     inx
+00:82B0 E010            	   421:     cpx #$10
+00:82B2 D0F8            	   422:     bne continue_clear_line_4
+00:82B4 60              	   423:     rts
+                        	   424: 
+                        	   425: backspace:
+00:82B5 48              	   426:     pha
+00:82B6 200685          	   427:     jsr display_backspace
+00:82B9 A920            	   428:     lda #" "
+00:82BB 204584          	   429:     jsr write_letter
+00:82BE 200685          	   430:     jsr display_backspace
+00:82C1 68              	   431:     pla
+00:82C2 60              	   432:     rts
+                        	   433: 
+                        	   434: keycodes:
+00:82C3 81              	   435:     byte $81, $11, $21, $41
+00:82C4 11
+00:82C5 21
+00:82C6 41
+00:82C7 12              	   436:     byte $12, $22, $42, $82
+00:82C8 22
+00:82C9 42
+00:82CA 82
+00:82CB 14              	   437:     byte $14, $24, $44, $84
+00:82CC 24
+00:82CD 44
+00:82CE 84
+00:82CF 18              	   438:     byte $18, $28, $48, $88
+00:82D0 28
+00:82D1 48
+00:82D2 88
+                        	   439: 
+                        	   440: keyletters:
+00:82D3 30              	   441:     byte "0", "1", "2", "3"
+00:82D4 31
+00:82D5 32
+00:82D6 33
+00:82D7 34              	   442:     byte "4", "5", "6", " "
+00:82D8 35
+00:82D9 36
+00:82DA 20
+00:82DB 37              	   443:     byte "7", "8", "9", "!"
+00:82DC 38
+00:82DD 39
+00:82DE 21
+00:82DF 2F              	   444:     byte "/", "*", "-", "+"
+00:82E0 2A
+00:82E1 2D
+00:82E2 2B
+                        	   445: 
+                        	   446: keyletters_2:
+00:82E3 41              	   447:     byte "A", "B", "C", "D"
+00:82E4 42
+00:82E5 43
+00:82E6 44
+00:82E7 45              	   448:     byte "E", "F", "G", "."
+00:82E8 46
+00:82E9 47
+00:82EA 2E
+00:82EB 48              	   449:     byte "H", "I", "J", "K"
+00:82EC 49
+00:82ED 4A
+00:82EE 4B
+00:82EF 52              	   450:     byte "R", ":", ".", "+"
+00:82F0 3A
+00:82F1 2E
+00:82F2 2B
+                        	   451: 
+                        	   452: error_msg:
+00:82F3 45              	   453:     byte "E", "R", "R", "O", "R"
+00:82F4 52
+00:82F5 52
+00:82F6 4F
+00:82F7 52
+                        	   454: 
+                        	   455: printline: ; Index register X is overwritten here
+00:82F8 48              	   456:     pha
+00:82F9 A200            	   457:     ldx #$0
+                        	   458: read_line_traverse:
+00:82FB BD2002          	   459:     lda MONITOR_LINE_2, X
+00:82FE 9D1002          	   460:     sta MONITOR_LINE_1, X
+00:8301 BD3002          	   461:     lda MONITOR_LINE_3, X
+00:8304 9D2002          	   462:     sta MONITOR_LINE_2, X
+00:8307 BD4002          	   463:     lda MONITOR_LINE_4, X
+00:830A 9D3002          	   464:     sta MONITOR_LINE_3, X
+00:830D E8              	   465:     inx
+00:830E E010            	   466:     cpx #$10 ; decimal 16, length of one line
+00:8310 D0E9            	   467:     bne read_line_traverse
+00:8312 207A84          	   468:     jsr clear_display
+00:8315 A200            	   469:     ldx #$0
+                        	   470: print_line1:
+00:8317 BD1002          	   471:     lda MONITOR_LINE_1, X
+00:831A 204584          	   472:     jsr write_letter
+00:831D E8              	   473:     inx
+00:831E E010            	   474:     cpx #$10
+00:8320 D0F5            	   475:     bne print_line1
+00:8322 209D84          	   476:     jsr line_2
+00:8325 A200            	   477:     ldx #$0
+                        	   478: print_line2:
+00:8327 BD2002          	   479:     lda MONITOR_LINE_2, X
+00:832A 204584          	   480:     jsr write_letter
+00:832D E8              	   481:     inx
+00:832E E010            	   482:     cpx #$10
+00:8330 D0F5            	   483:     bne print_line2
+00:8332 20C084          	   484:     jsr line_3
+00:8335 A200            	   485:     ldx #$0
+                        	   486: print_line3:
+00:8337 BD3002          	   487:     lda MONITOR_LINE_3, X
+00:833A 204584          	   488:     jsr write_letter
+00:833D E8              	   489:     inx
+00:833E E010            	   490:     cpx #$10
+00:8340 D0F5            	   491:     bne print_line3
+00:8342 20E384          	   492:     jsr line_4
+00:8345 A200            	   493:     ldx #$0
+                        	   494: print_empty_line4:
+00:8347 A920            	   495:     lda #" "
+00:8349 9D4002          	   496:     sta MONITOR_LINE_4, X
+00:834C 204584          	   497:     jsr write_letter
+00:834F E8              	   498:     inx
+00:8350 E010            	   499:     cpx #$10
+00:8352 D0F3            	   500:     bne print_empty_line4
+00:8354 20E384          	   501:     jsr line_4
+00:8357 A900            	   502:     lda #$0
+00:8359 8D0202          	   503:     sta CURSOR_POSITION
+00:835C 68              	   504:     pla
+00:835D 60              	   505:     rts
+                        	   506: 
+                        	   507: init_lcd: ; ===== INIT_LCD START ===============
+00:835E A9C0            	   508:     lda #($C << 4)
+00:8360 8D0060          	   509:     sta $6000
+00:8363 200D84          	   510:     jsr longlong_sleep
+00:8366 A9C8            	   511:     lda #(($C << 4) | E)
+00:8368 8D0060          	   512:     sta $6000
+00:836B 200D84          	   513:     jsr longlong_sleep
+00:836E A9C0            	   514:     lda #($C << 4) ;; TODO: figure out if this enable low data signal is necessary
+00:8370 8D0060          	   515:     sta $6000
+00:8373 200D84          	   516:     jsr longlong_sleep
+00:8376 E8              	   517:     inx
+00:8377 E003            	   518:     cpx #$3
+00:8379 D0E3            	   519:     bne init_lcd
+                        	   520:     
+00:837B A200            	   521:     ldx #$0
+                        	   522: 
+                        	   523: lcd_4bitmode: ; 4-bit
+00:837D A920            	   524:     lda #($2 << 4)
+00:837F 8D0060          	   525:     sta $6000
+00:8382 200D84          	   526:     jsr longlong_sleep
+00:8385 A928            	   527:     lda #(($2 << 4) | E)
+00:8387 8D0060          	   528:     sta $6000
+00:838A 200D84          	   529:     jsr longlong_sleep
+00:838D A920            	   530:     lda #($2 << 4)
+00:838F 8D0060          	   531:     sta $6000
+00:8392 200D84          	   532:     jsr longlong_sleep
+00:8395 E8              	   533:     inx
+00:8396 E002            	   534:     cpx #$2
+00:8398 D0E3            	   535:     bne lcd_4bitmode
+                        	   536: 
+00:839A A200            	   537:     ldx #$0
+                        	   538: 
+                        	   539: lcd_funset:
+00:839C A980            	   540:     lda #(N << 7)       ;;80
+00:839E 8D0060          	   541:     sta $6000
+00:83A1 200D84          	   542:     jsr longlong_sleep
+00:83A4 A988            	   543:     lda #((N << 7) | E) ;;88
+00:83A6 8D0060          	   544:     sta $6000
+00:83A9 200D84          	   545:     jsr longlong_sleep
+00:83AC A900            	   546:     lda #0   ;;(N << 7)   00
+00:83AE 8D0060          	   547:     sta $6000
+00:83B1 200D84          	   548:     jsr longlong_sleep
+00:83B4 A908            	   549:     lda #E              ;;08
+00:83B6 8D0060          	   550:     sta $6000
+00:83B9 200D84          	   551:     jsr longlong_sleep
+00:83BC A900            	   552:     lda #0              ;;00
+00:83BE 8D0060          	   553:     sta $6000
+00:83C1 200D84          	   554:     jsr longlong_sleep
+                        	   555: 
+                        	   556: lcd_dp_on:
+00:83C4 A9F0            	   557:     lda #($f << 4)
+00:83C6 8D0060          	   558:     sta $6000
+00:83C9 200D84          	   559:     jsr longlong_sleep
+00:83CC A9F8            	   560:     lda #(($f << 4) | E)
+00:83CE 8D0060          	   561:     sta $6000
+00:83D1 200D84          	   562:     jsr longlong_sleep
+00:83D4 A9F0            	   563:     lda #($f << 4)
+00:83D6 8D0060          	   564:     sta $6000
+00:83D9 200D84          	   565:     jsr longlong_sleep
+00:83DC A900            	   566:     lda #$0
+00:83DE 8D0060          	   567:     sta $6000
+00:83E1 200D84          	   568:     jsr longlong_sleep
+00:83E4 A908            	   569:     lda #$8
+00:83E6 8D0060          	   570:     sta $6000
+00:83E9 200D84          	   571:     jsr longlong_sleep
+                        	   572: 
+                        	   573: lcd_clr_dp:
+00:83EC A910            	   574:     lda #$10
+00:83EE 8D0060          	   575:     sta $6000
+00:83F1 200D84          	   576:     jsr longlong_sleep
+00:83F4 A918            	   577:     lda #($10 | E)
+00:83F6 8D0060          	   578:     sta $6000
+00:83F9 200D84          	   579:     jsr longlong_sleep
+00:83FC A910            	   580:     lda #$10
+00:83FE 8D0060          	   581:     sta $6000
+00:8401 200D84          	   582:     jsr longlong_sleep
+                        	   583: 
+                        	   584: ;; Set RS to data
+00:8404 A902            	   585:     lda #RS
+00:8406 8D0060          	   586:     sta $6000
+00:8409 200D84          	   587:     jsr longlong_sleep
+00:840C 60              	   588:     rts ; ===== INIT_LCD END ===============
+                        	   589: 
+                        	   590: longlong_sleep:
+00:840D 48              	   591:     pha
+00:840E 8A              	   592:     txa
+00:840F 48              	   593:     pha
+00:8410 98              	   594:     tya
+00:8411 48              	   595:     pha
+00:8412 A000            	   596:     ldy #$0
+                        	   597: outerloop:
+00:8414 A200            	   598:     ldx #$0
+00:8416 C8              	   599:     iny ; increment y
+00:8417 C014            	   600:     cpy #$14
+00:8419 D006            	   601:     bne innerloop
+00:841B 68              	   602:     pla
+00:841C A8              	   603:     tay
+00:841D 68              	   604:     pla
+00:841E AA              	   605:     tax
+00:841F 68              	   606:     pla      ; pull accumulator back
+00:8420 60              	   607:     rts
+                        	   608: innerloop:
+00:8421 E8              	   609:     inx ; increment x
+00:8422 E014            	   610:     cpx #$14
+00:8424 D0FB            	   611:     bne innerloop
+00:8426 4C1484          	   612:     jmp outerloop
+                        	   613: 
+                        	   614: longlonglong_sleep:
+00:8429 48              	   615:     pha
+00:842A 8A              	   616:     txa
+00:842B 48              	   617:     pha
+00:842C 98              	   618:     tya
+00:842D 48              	   619:     pha
+00:842E A000            	   620:     ldy #$0
+                        	   621: louterloop:
+00:8430 A200            	   622:     ldx #$0
+00:8432 C8              	   623:     iny ; increment y
+00:8433 C0FF            	   624:     cpy #$ff
+00:8435 D006            	   625:     bne linnerloop
+00:8437 68              	   626:     pla
+00:8438 A8              	   627:     tay
+00:8439 68              	   628:     pla
+00:843A AA              	   629:     tax
+00:843B 68              	   630:     pla      ; pull accumulator back
+00:843C 60              	   631:     rts
+                        	   632: linnerloop:
+                        	   633:     ;jsr longlong_sleep
+00:843D E8              	   634:     inx ; increment x
+00:843E E0FF            	   635:     cpx #$ff
+00:8440 D0FB            	   636:     bne linnerloop
+00:8442 4C3084          	   637:     jmp louterloop
+                        	   638: 
+                        	   639: write_letter:
+00:8445 48              	   640:     pha
+00:8446 29F0            	   641:     and #$f0   ; A &= 0xf0
+00:8448 0902            	   642:     ora #RS    ; A |= RS
+00:844A 0908            	   643:     ora #E     ; A |= E
+00:844C 8D0060          	   644:     sta $6000
+00:844F 200D84          	   645:     jsr longlong_sleep
+00:8452 29F0            	   646:     and #$f0   ; A &= 0xf0
+00:8454 0902            	   647:     ora #RS    ; A |= RS
+00:8456 8D0060          	   648:     sta $6000
+00:8459 200D84          	   649:     jsr longlong_sleep
+00:845C 68              	   650:     pla ; pull original A value from stack
+00:845D 48              	   651:     pha ; push back immediately
+00:845E 0A              	   652:     asl A
+00:845F 0A              	   653:     asl A
+00:8460 0A              	   654:     asl A
+00:8461 0A              	   655:     asl A    ; A << 4
+00:8462 29F0            	   656:     and #$f0   ; A &= 0xf0
+00:8464 0902            	   657:     ora #RS    ; A |= RS
+00:8466 0908            	   658:     ora #E     ; A |= E
+00:8468 8D0060          	   659:     sta $6000
+00:846B 200D84          	   660:     jsr longlong_sleep
+00:846E 29F0            	   661:     and #$f0   ; A &= 0xf0
+00:8470 0902            	   662:     ora #RS    ; A |= RS
+00:8472 8D0060          	   663:     sta $6000
+00:8475 200D84          	   664:     jsr longlong_sleep
+00:8478 68              	   665:     pla
+00:8479 60              	   666:     rts
+                        	   667: 
+                        	   668: clear_display:
+00:847A 48              	   669:     pha
+00:847B A908            	   670:     lda #(($1 & $f0) | E)
+00:847D 8D0060          	   671:     sta $6000
+00:8480 200D84          	   672:     jsr longlong_sleep
+00:8483 A900            	   673:     lda #($1 & $f0)
+00:8485 8D0060          	   674:     sta $6000
+00:8488 200D84          	   675:     jsr longlong_sleep
+00:848B A918            	   676:     lda #((($c1 << 4) & $f0) | E)
+00:848D 8D0060          	   677:     sta $6000
+00:8490 200D84          	   678:     jsr longlong_sleep
+00:8493 A910            	   679:     lda #(($c1 << 4) & $f0)
+00:8495 8D0060          	   680:     sta $6000
+00:8498 200D84          	   681:     jsr longlong_sleep
+00:849B 68              	   682:     pla
+00:849C 60              	   683:     rts
+                        	   684: 
+                        	   685: line_2: ; 0x80 | 0x40 = 0xc0, 0x80: set DDRAM address, 0x40: DDRAM address for line 2 column 1
+00:849D 48              	   686:     pha
+00:849E A9C8            	   687:     lda #(($c0 & $f0) | E)
+00:84A0 8D0060          	   688:     sta $6000
+00:84A3 200D84          	   689:     jsr longlong_sleep
+00:84A6 A9C0            	   690:     lda #($c0 & $f0)
+00:84A8 8D0060          	   691:     sta $6000
+00:84AB 200D84          	   692:     jsr longlong_sleep
+00:84AE A908            	   693:     lda #((($c0 << 4) & $f0) | E)
+00:84B0 8D0060          	   694:     sta $6000
+00:84B3 200D84          	   695:     jsr longlong_sleep
+00:84B6 A900            	   696:     lda #(($c0 << 4) & $f0)
+00:84B8 8D0060          	   697:     sta $6000
+00:84BB 200D84          	   698:     jsr longlong_sleep
+00:84BE 68              	   699:     pla
+00:84BF 60              	   700:     rts
+                        	   701: 
+                        	   702: line_3: ; 0x80 | 0x10 = 0x90, 0x80: set DDRAM address, 0x10: DDRAM address for line 3 column 1
+00:84C0 48              	   703:     pha
+00:84C1 A998            	   704:     lda #(($90 & $f0) | E)
+00:84C3 8D0060          	   705:     sta $6000
+00:84C6 200D84          	   706:     jsr longlong_sleep
+00:84C9 A990            	   707:     lda #($90 & $f0)
+00:84CB 8D0060          	   708:     sta $6000
+00:84CE 200D84          	   709:     jsr longlong_sleep
+00:84D1 A908            	   710:     lda #((($90 << 4) & $f0) | E)
+00:84D3 8D0060          	   711:     sta $6000
+00:84D6 200D84          	   712:     jsr longlong_sleep
+00:84D9 A900            	   713:     lda #(($90 << 4) & $f0)
+00:84DB 8D0060          	   714:     sta $6000
+00:84DE 200D84          	   715:     jsr longlong_sleep
+00:84E1 68              	   716:     pla
+00:84E2 60              	   717:     rts
+                        	   718: 
+                        	   719: line_4: ; 0x80 | 0x50 = 0xd0, 0x80: set DDRAM address, 0x50: DDRAM address for line 4 column 1
+00:84E3 48              	   720:     pha
+00:84E4 A9D8            	   721:     lda #(($d0 & $f0) | E)
+00:84E6 8D0060          	   722:     sta $6000
+00:84E9 200D84          	   723:     jsr longlong_sleep
+00:84EC A9D0            	   724:     lda #($d0 & $f0)
+00:84EE 8D0060          	   725:     sta $6000
+00:84F1 200D84          	   726:     jsr longlong_sleep
+00:84F4 A908            	   727:     lda #((($d0 << 4) & $f0) | E)
+00:84F6 8D0060          	   728:     sta $6000
+00:84F9 200D84          	   729:     jsr longlong_sleep
+00:84FC A900            	   730:     lda #(($d0 << 4) & $f0)
+00:84FE 8D0060          	   731:     sta $6000
+00:8501 200D84          	   732:     jsr longlong_sleep
+00:8504 68              	   733:     pla
+00:8505 60              	   734:     rts
+                        	   735: 
+                        	   736: display_backspace:
+00:8506 48              	   737:     pha
+00:8507 A918            	   738:     lda #(($10 & $f0) | E)
+00:8509 8D0060          	   739:     sta $6000
+00:850C 200D84          	   740:     jsr longlong_sleep
+00:850F A910            	   741:     lda #($10 & $f0)
+00:8511 8D0060          	   742:     sta $6000
+00:8514 200D84          	   743:     jsr longlong_sleep
+00:8517 A908            	   744:     lda #((($10 << 4) & $f0) | E)
+00:8519 8D0060          	   745:     sta $6000
+00:851C 200D84          	   746:     jsr longlong_sleep
+00:851F A900            	   747:     lda #(($10 << 4) & $f0)
+00:8521 8D0060          	   748:     sta $6000
+00:8524 200D84          	   749:     jsr longlong_sleep
+00:8527 68              	   750:     pla
+00:8528 60              	   751:     rts
+                        	   752: 
+                        	   753:     org $8fff
+01:8FFF EA              	   754:     byte $ea
+                        	   755: 
+
+
+Symbols by name:
+COMMAND                          E:0250
+CURSOR_POSITION                  E:0202
+E                                E:0008
+LOW_NYBBLE                       E:0255
+MONITOR_LINE_1                   E:0210
+MONITOR_LINE_2                   E:0220
+MONITOR_LINE_3                   E:0230
+MONITOR_LINE_4                   E:0240
+N                                E:0001
+RAH                              E:0031
+RAL                              E:0030
+RS                               E:0002
+SHIFT                            E:0201
+TMP                              E:0200
+TMP_KEYCODE                      E:0203
+ascii_to_byte                    A:81A3
+backspace                        A:82B5
+boot_msg                         A:8032
+clear_display                    A:847A
+clear_input_buffer               A:8143
+clear_line_4                     A:82A8
+command_end                      A:8213
+continue_clear_line_4            A:82AC
+continue_polling                 A:8055
+convert_nybble                   A:8289
+display_backspace                A:8506
+end_ascii_to_byte                A:81E7
+end_kb_encoded_write             A:8119
+endloop                          A:802F
+enter_pressed                    E:0251
+error_msg                        A:82F3
+execute                          A:8257
+fetch_char                       A:814D
+getline                          A:8055
+hex_to_ascii                     A:8280
+hex_to_ascii_end                 A:82A6
+inc_and_next                     A:819C
+increment_byte_index             A:81D9
+init_lcd                         A:835E
+init_monitor_memory              A:8037
+init_monitor_memory_loop         A:8043
+innerloop                        A:8421
+input_bytes                      E:0260
+input_bytes_index                E:0254
+interpret                        A:8130
+interpret_end                    A:81A1
+invalid_hex                      A:8197
+is_a_to_f                        A:81B0
+is_hex_letter                    E:0253
+is_letter_set                    A:8191
+kb_encode                        A:8090
+kb_encoded_write                 A:80A9
+kb_end                           A:808D
+kb_index                         A:8086
+kb_poll                          A:8063
+kb_shft                          A:806A
+keycode_search                   A:8098
+keycode_search_continue          A:80A6
+keycodes                         A:82C3
+keyletters                       A:82D3
+keyletters_2                     A:82E3
+lcd_4bitmode                     A:837D
+lcd_clr_dp                       A:83EC
+lcd_dp_on                        A:83C4
+lcd_funset                       A:839C
+line_2                           A:849D
+line_3                           A:84C0
+line_4                           A:84E3
+linnerloop                       A:843D
+longlong_sleep                   A:840D
+longlonglong_sleep               A:8429
+louterloop                       A:8430
+no_shift_add                     A:8129
+not_hex_letter                   A:818C
+nybble_converted                 A:8296
+nybble_to_number                 A:8293
+outerloop                        A:8414
+print_boot_msg                   A:8012
+print_empty_line4                A:8347
+print_line1                      A:8317
+print_line2                      A:8327
+print_line3                      A:8337
+printline                        A:82F8
+read                             A:8214
+read_line_traverse               A:82FB
+run_command                      A:81E8
+shell                            A:8020
+skip_clear                       A:80C9
+skip_enter                       A:80DF
+skip_execute                     A:8209
+skip_read                        A:81F5
+skip_shift                       A:80D3
+skip_throw_error                 A:8213
+skip_was_read                    A:8160
+skip_was_run                     A:8178
+skip_was_write                   A:816C
+skip_write                       A:81FF
+store_shift                      A:812B
+store_temp                       A:81B3
+throw_error                      A:826F
+tmp_input_byte                   E:0252
+update_shift                     A:811D
+use_keyletters_1                 A:80FC
+use_keyletters_2                 A:810C
+write                            A:823F
+write_error                      A:8274
+write_keyletter                  A:80EE
+write_letter                     A:8445
+
+Symbols by value:
+0001 N
+0002 RS
+0008 E
+0030 RAL
+0031 RAH
+0200 TMP
+0201 SHIFT
+0202 CURSOR_POSITION
+0203 TMP_KEYCODE
+0210 MONITOR_LINE_1
+0220 MONITOR_LINE_2
+0230 MONITOR_LINE_3
+0240 MONITOR_LINE_4
+0250 COMMAND
+0251 enter_pressed
+0252 tmp_input_byte
+0253 is_hex_letter
+0254 input_bytes_index
+0255 LOW_NYBBLE
+0260 input_bytes
+8012 print_boot_msg
+8020 shell
+802F endloop
+8032 boot_msg
+8037 init_monitor_memory
+8043 init_monitor_memory_loop
+8055 continue_polling
+8055 getline
+8063 kb_poll
+806A kb_shft
+8086 kb_index
+808D kb_end
+8090 kb_encode
+8098 keycode_search
+80A6 keycode_search_continue
+80A9 kb_encoded_write
+80C9 skip_clear
+80D3 skip_shift
+80DF skip_enter
+80EE write_keyletter
+80FC use_keyletters_1
+810C use_keyletters_2
+8119 end_kb_encoded_write
+811D update_shift
+8129 no_shift_add
+812B store_shift
+8130 interpret
+8143 clear_input_buffer
+814D fetch_char
+8160 skip_was_read
+816C skip_was_write
+8178 skip_was_run
+818C not_hex_letter
+8191 is_letter_set
+8197 invalid_hex
+819C inc_and_next
+81A1 interpret_end
+81A3 ascii_to_byte
+81B0 is_a_to_f
+81B3 store_temp
+81D9 increment_byte_index
+81E7 end_ascii_to_byte
+81E8 run_command
+81F5 skip_read
+81FF skip_write
+8209 skip_execute
+8213 skip_throw_error
+8213 command_end
+8214 read
+823F write
+8257 execute
+826F throw_error
+8274 write_error
+8280 hex_to_ascii
+8289 convert_nybble
+8293 nybble_to_number
+8296 nybble_converted
+82A6 hex_to_ascii_end
+82A8 clear_line_4
+82AC continue_clear_line_4
+82B5 backspace
+82C3 keycodes
+82D3 keyletters
+82E3 keyletters_2
+82F3 error_msg
+82F8 printline
+82FB read_line_traverse
+8317 print_line1
+8327 print_line2
+8337 print_line3
+8347 print_empty_line4
+835E init_lcd
+837D lcd_4bitmode
+839C lcd_funset
+83C4 lcd_dp_on
+83EC lcd_clr_dp
+840D longlong_sleep
+8414 outerloop
+8421 innerloop
+8429 longlonglong_sleep
+8430 louterloop
+843D linnerloop
+8445 write_letter
+847A clear_display
+849D line_2
+84C0 line_3
+84E3 line_4
+8506 display_backspace
