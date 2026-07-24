@@ -16,6 +16,11 @@ TMP_KEYCODE = $0203
 kb_polling_mode = $0204 ; 0 for continuous pollling, 1 for one time polling
 ; continuous polling polls until a keystroke occurs.
 counter_var = $0205 ; DEBUG VARIABLE FOR DEBUG COUNTER PROGRAM
+; counter_var + 1 = $0206 also in use
+
+ascii_to_hex_temp = $0208
+
+add8_prog_temp_var = $020a
 
 MONITOR_LINE_1 = $0210 ; 16 characters each
                        ; so line 1 occupies 0x0210 - 0x021f etc
@@ -424,19 +429,36 @@ counter:
     sta TMP_KEYCODE
     lda #$1
     sta kb_polling_mode
-    lda #$2f
+    lda #$0
     sta counter_var
+    sta counter_var + 1
 continue_counter:
     lda counter_var
     clc
     adc #$1
     sta counter_var
-    cmp #$3a
-    bne skip_reset_counter
-    lda #$30
-    sta counter_var
+    lda counter_var + 1
+    adc #$0
+    sta counter_var + 1
+    ;cmp #$3a
+    ;bne skip_reset_counter
+    ;lda #$30
+    ;sta counter_var
 skip_reset_counter:
     jsr line_4
+    ldx #$0
+    lda counter_var + 1
+    jsr hex_to_ascii  ;jsr write_letter
+    ldx #$2
+    lda counter_var
+    jsr hex_to_ascii
+    lda MONITOR_LINE_4
+    jsr write_letter
+    lda MONITOR_LINE_4 + 1
+    jsr write_letter
+    lda MONITOR_LINE_4 + 2
+    jsr write_letter
+    lda MONITOR_LINE_4 + 3
     jsr write_letter
     jsr longlonglong_sleep
     jsr kb_poll
@@ -451,8 +473,24 @@ add8_prog:
     lda #"?"
     sta MONITOR_LINE_4 + 1
     jsr printline
-    jsr getline
+    jsr getline ; getline stores input to MONITOR_LINE_4
+    ldx #$0
+    jsr ascii_to_hex ; 2 symbols of ascii converted to 8-bit hex and stored to accumulator
+    sta add8_prog_temp_var
+    lda #"B"
+    sta MONITOR_LINE_4
+    lda #"?"
+    sta MONITOR_LINE_4 + 1
     jsr printline
+    jsr getline
+    ldx #$0
+    jsr ascii_to_hex
+    clc
+    adc add8_prog_temp_var
+    ldx #$0
+    jsr hex_to_ascii
+    jsr printline ; printline empties MONITOR_LINE_4
+    ; shell currently calls printline after a program has returned
     rts
 
 ascii_to_byte_w_index: ; in x-register, store index of ascii to fetch from monitor line 4 buffer
@@ -522,6 +560,34 @@ nybble_converted:
     jmp convert_nybble
 hex_to_ascii_end:
     pla
+    rts
+
+ascii_to_hex: ; hex stored in accumulator, cursor index stored in X-register
+    ldy #$0
+ascii_to_hex_loop:
+    lda MONITOR_LINE_4, X
+    EOR #$30
+    cmp #$a
+    bcc digit
+    adc #$88
+    cmp #$fa
+    bcc nothex
+digit:
+    cpy #$1
+    beq no_shift
+    asl
+    asl
+    asl
+    asl
+    and #$f0
+    sta ascii_to_hex_temp
+    iny
+    inx
+    jmp ascii_to_hex_loop
+no_shift:
+    and #$0f
+    ora ascii_to_hex_temp
+nothex:
     rts
 
 clear_line_4:
