@@ -22,6 +22,11 @@ ascii_to_hex_temp = $0208
 
 add8_prog_temp_var = $020a
 
+mem_dump_start_addr_h = $020c
+mem_dump_start_addr_l = $020d
+mem_dump_end_addr_h = $020e
+mem_dump_end_addr_l = $020f
+
 MONITOR_LINE_1 = $0210 ; 16 characters each
                        ; so line 1 occupies 0x0210 - 0x021f etc
 MONITOR_LINE_2 = $0220 ; 0x0220 - 0x022f
@@ -35,6 +40,8 @@ tmp_input_byte = $0252
 is_hex_letter = $0253
 input_bytes_index = $0254
 LOW_NYBBLE = $0255
+
+mem_dump_cursor_pos = $0256
 
 RAL = $030 ; Read Address Low (pointer) for reading command   | POINTERS MUST BE ON ZERO PAGE
 RAH = $031 ; Read Address High (pointer) for reading command  | ON 6502
@@ -267,6 +274,11 @@ skip_was_counter:
     sta COMMAND
     jmp inc_and_next
 skip_was_add8_prog:
+    cmp #"G"
+    bne skip_was_mem_dump
+    sta COMMAND
+    jmp inc_and_next
+skip_was_mem_dump:
     cmp #$30    ; 0x30 is "0", character should be equal or higher
     bmi invalid_hex ; if A - 30 is negative, BMI branches
     cmp #$47    ; 0x46 is "F", character should be equal or lower
@@ -358,6 +370,11 @@ skip_counter:
     jsr add8_prog
     jmp command_end
 skip_add8_prog:
+    cmp #"G"
+    bne skip_mem_dump
+    jsr mem_dump
+    jmp command_end
+skip_mem_dump:
     cmp #"!"
     bne skip_throw_error
     jsr throw_error
@@ -491,6 +508,92 @@ add8_prog:
     jsr hex_to_ascii
     jsr printline ; printline empties MONITOR_LINE_4
     ; shell currently calls printline after a program has returned
+    rts
+
+mem_dump:
+    lda #"A"
+    sta MONITOR_LINE_4
+    lda #"?"
+    sta MONITOR_LINE_4 + 1
+    jsr printline
+    jsr getline ; getline stores input to MONITOR_LINE_4
+    ldx #$0
+    jsr ascii_to_hex
+    sta mem_dump_start_addr_h
+    ldx #$2
+    jsr ascii_to_hex
+    sta mem_dump_start_addr_l
+    lda #"B"
+    sta MONITOR_LINE_4
+    lda #"?"
+    sta MONITOR_LINE_4 + 1
+    jsr printline
+    jsr getline
+    ldx #$0
+    jsr ascii_to_hex
+    sta mem_dump_end_addr_h
+    ldx #$2
+    jsr ascii_to_hex
+    sta mem_dump_end_addr_l
+    ldx #$0
+    lda mem_dump_start_addr_h
+    jsr hex_to_ascii
+    ldx #$2
+    lda mem_dump_start_addr_l
+    jsr hex_to_ascii
+    lda #"-"
+    sta MONITOR_LINE_4 + 4
+    ldx #$5
+    lda mem_dump_end_addr_h
+    jsr hex_to_ascii
+    ldx #$7
+    lda mem_dump_end_addr_l
+    jsr hex_to_ascii
+    jsr printline
+    
+    ldx #$0
+    stx mem_dump_cursor_pos
+    
+    ; Print the value in the first address:
+mem_dump_print_byte_loop:
+    lda mem_dump_start_addr_h
+    sta RAH
+    lda mem_dump_start_addr_l
+    sta RAL
+    ldy #$0
+    ldx mem_dump_cursor_pos
+    lda (RAL), Y
+    jsr hex_to_ascii
+    inx
+    lda #" "
+    sta MONITOR_LINE_4, X
+    inx
+    cpx #15
+    bmi mem_dump_no_newline
+    jsr printline
+    ldx #$0
+mem_dump_no_newline:
+    stx mem_dump_cursor_pos
+    clc
+    lda mem_dump_start_addr_l
+    adc #$1
+    sta mem_dump_start_addr_l
+    bne end_mem_dump_addr_inc
+    clc
+    lda mem_dump_start_addr_h
+    adc #$1
+    sta mem_dump_start_addr_h
+end_mem_dump_addr_inc:
+    lda mem_dump_start_addr_l
+    cmp mem_dump_end_addr_l
+    bne continue_mem_dump
+    lda mem_dump_start_addr_h
+    cmp mem_dump_end_addr_h
+    bne continue_mem_dump
+    jmp end_mem_dump
+continue_mem_dump:
+    jmp mem_dump_print_byte_loop
+end_mem_dump:
     rts
 
 ascii_to_byte_w_index: ; in x-register, store index of ascii to fetch from monitor line 4 buffer
